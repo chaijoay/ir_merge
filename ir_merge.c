@@ -13,7 +13,8 @@
 /// LAST RELEASE DATE  : 31-May-2019
 ///
 /// MODIFICATION HISTORY :
-///     1.0     31-May-2019     First Version
+///     1.0         31-May-2019     First Version
+///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
 ///
 ///
 #define _XOPEN_SOURCE           700         // Required under GLIBC for nftw()
@@ -52,6 +53,7 @@ int gnSnapCnt;
 int gnLenPreIr;
 int gnLenSufIr;
 int gnPrcId;
+int gnDayToKeep;
 
 const char gszIniStrSection[E_NOF_SECTION][SIZE_ITEM_T] = {
     "INPUT",
@@ -225,9 +227,10 @@ int main(int argc, char *argv[])
                     getTokenItem(snp_line, 1, '|', sdir);
                     getTokenItem(snp_line, 2, '|', sfname);
                     
-                    if ( seq > 1000 ) seq = 0;
-                    seq++;
-                    procSynFiles(sdir, sfname, seq, 0L);
+                    if ( ! olderThan(atoi(gszIniParCommon[E_SKIP_OLD_FILE]), sdir, sfname) ) {
+                        ( ++seq > 999 ? seq = 0 : seq );
+                        procSynFiles(sdir, sfname, seq, 0L);
+                    }
                     
                     nInpFileCntDay++;
                     nInpFileCntRnd++;
@@ -237,6 +240,10 @@ int main(int argc, char *argv[])
                 writeLog(LOG_INF, "total processed files for this round=%d round_time_used=%d sec", nInpFileCntRnd, (t_bat_stop - t_bat_start));
                 
                 fclose(ifp);
+                
+                if ( strcmp(gszToday, getSysDTM(DTM_DATE_ONLY)) ) {
+                    purgeOldCdr(gnDayToKeep, gnPrcId);  // purge only at end of day
+                }
                 disconnSub(gszIniParDbConn[E_SUB_DB_SID]);
 
             }
@@ -417,13 +424,16 @@ int _chkIrFile(const char *fpath, const struct stat *info, int typeflag, struct 
 
 int logState(const char *dir, const char *file_name)
 {
+    int result = 0;
     if ( gfpState == NULL ) {
         char fstate[SIZE_ITEM_L];
         memset(fstate, 0x00, sizeof(fstate));
         sprintf(fstate, "%s/%s_%s%s", gszIniParCommon[E_STATE_DIR], gszAppName, gszToday, STATE_SUFF);
         gfpState = fopen(fstate, "a");
     }
-    return fprintf(gfpState, "%s|%s\n", dir, file_name);
+    result = fprintf(gfpState, "%s|%s\n", dir, file_name);
+    fflush(gfpState);
+    return result;
 }
 
 void clearOldState()
@@ -462,6 +472,12 @@ void clearOldState()
                 len2 = strlen(p_dirent->d_name);
                 // compare only last term of YYYYMMDD.proclist
                 if ( strcmp(szOldestFile, (p_dirent->d_name + (len2-len1))) > 0 ) {
+                    char old_state[SIZE_ITEM_L];
+                    memset(old_state, 0x00, sizeof(old_state));
+                    sprintf(old_state, "%s/%s", gszIniParCommon[E_STATE_DIR], p_dirent->d_name);
+                    
+                    purgeOldData(old_state);
+                    
                     sprintf(tmp, "rm -f %s/%s 2>/dev/null", gszIniParCommon[E_STATE_DIR], p_dirent->d_name);
                     writeLog(LOG_INF, "remove state file: %s", p_dirent->d_name);
                     system(tmp);
@@ -472,6 +488,29 @@ void clearOldState()
     }
 }
 
+void purgeOldData(const char *old_state)
+{
+    FILE *ofp = NULL;
+    char line[SIZE_ITEM_L], sdir[SIZE_ITEM_L], sfname[SIZE_ITEM_L], cmd[SIZE_ITEM_L];
+    
+    if ( (ofp = fopen(old_state, "r")) != NULL ) {
+        memset(line, 0x00, sizeof(line));
+        while ( fgets(line, sizeof(line),ofp) ) {
+            memset(sdir,   0x00, sizeof(sdir));
+            memset(sfname, 0x00, sizeof(sfname));
+            memset(cmd,    0x00, sizeof(cmd));
+            
+            getTokenItem(line, 1, '|', sdir);
+            getTokenItem(line, 2, '|', sfname);
+            
+            sprintf(cmd, "rm -f %s/%s", sdir, sfname);
+            writeLog(LOG_DB3, "\told file %s/%s purged", sdir, sfname);
+            system(cmd);
+        }
+        fclose(ofp);
+        ofp = NULL;
+    }
+}
 
 int readConfig(int argc, char *argv[])
 {
@@ -710,6 +749,14 @@ int validateIni()
         result = FAILED;
         fprintf(stderr, "%s must be > 0 (%s)\n", gszIniStrDbConn[E_RETRY_WAIT], gszIniParDbConn[E_RETRY_WAIT]);
     }
+    
+    // number of days to purge cdr in db uses max value of wether E_SKIP_OLD_FILE or E_KEEP_STATE_DAY
+    if ( atoi(gszIniParCommon[E_SKIP_OLD_FILE]) > atoi(gszIniParCommon[E_KEEP_STATE_DAY]) ) {
+        gnDayToKeep = atoi(gszIniParCommon[E_SKIP_OLD_FILE]);
+    }
+    else {
+        gnDayToKeep = atoi(gszIniParCommon[E_KEEP_STATE_DAY]);
+    }
 
     return result;
 
@@ -827,6 +874,8 @@ writeLog(LOG_DB3, "skip unhandled imsi '%s'", pbuf_rec[E_IMSI]);
             writeLog(LOG_INF, "processed %s -> %s", fname, basename(gszOutFname));
             sprintf(cmd, "mv %s%s %s", gszOutFname, TMPSUF, gszOutFname);
             system(cmd);
+            
+            chmod(gszOutFname, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 
 //#ifndef _USE_NEW_LAYOUT_     
 //#define _USE_NEW_LAYOUT_
@@ -840,6 +889,9 @@ writeLog(LOG_DB3, "skip unhandled imsi '%s'", pbuf_rec[E_IMSI]);
             strncpy(s, gszOutFname, (f - gszOutFname));
             sprintf(cmd, "touch %s.syn", s);
             system(cmd);
+            
+            sprintf(cmd, "%s.syn", s);
+            chmod(cmd, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 #endif
         }
 
@@ -854,6 +906,30 @@ writeLog(LOG_DB3, "skip unhandled imsi '%s'", pbuf_rec[E_IMSI]);
         // }
         // unlink(full_ir_name);
     }
+
+}
+
+int olderThan(int day, const char *sdir, const char *fname)
+{
+    struct stat stat_buf;
+    time_t systime = 0;
+    int    result = FALSE;
+    char   full_name[SIZE_ITEM_L];
+    long   file_age = 0;
+    long   bound = (long)(day * SEC_IN_DAY);
+    
+    memset(full_name, 0x00, sizeof(full_name));
+    
+    memset(&stat_buf, 0x00, sizeof(stat_buf));
+    if ( !lstat(full_name, &stat_buf) ) {
+        systime = time(NULL);
+        file_age = (long)(systime - stat_buf.st_mtime);
+        if ( file_age > bound ) {
+            result = TRUE;
+        }
+    }
+writeLog(LOG_DB2, "%s olderThan %d days (%ld sec) ", fname, day, file_age);
+    return result;
 
 }
 

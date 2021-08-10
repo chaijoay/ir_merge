@@ -67,6 +67,7 @@ void  doCommit();
 
 int   checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, int proc_id);
 int   insertIrCdr(ST_IR_COMMON *ircdr, int proc_id);
+int   purgeOldCdr(int days_to_keep, int proc_id);
 
 
 #ifdef  __cplusplus

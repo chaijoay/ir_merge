@@ -245,3 +245,27 @@ writeLog(LOG_DB3, "insert failed");
     }
 
 }
+
+int purgeOldCdr(int days_to_keep, int proc_id)
+{
+
+    VARCHAR szDSql[SIZE_BUFF];
+    
+    writeLog(LOG_INF, "check and purge cdr older than %d days", days_to_keep);
+    sprintf((char*)szDSql.arr, "DELETE FROM MERGE_STATE_%d WHERE TRUNC(START_DTM) < TRUNC(SYSDATE - %d) ", proc_id, days_to_keep);
+    szDSql.len = strlen((char *)szDSql.arr);
+writeLog(LOG_DB3, (char*)szDSql.arr);
+    
+    EXEC SQL AT SUB_DB EXECUTE IMMEDIATE :szDSql;
+    if ( sqlca.sqlcode == SUCCESS ) {
+writeLog(LOG_DB3, "purge result %d (%s)", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc));
+        doCommit();
+        return SUCCESS;
+    }
+    else {
+        writeLog(LOG_ERR, "purgeOldCdr: Ora(%d) %s, purge MERGE_STATE_%d table failed", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc), proc_id);
+writeLog(LOG_DB3, "purge failed");
+        return FAILED;
+    }
+    
+}

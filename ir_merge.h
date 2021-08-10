@@ -13,7 +13,8 @@
 /// LAST RELEASE DATE  : 31-May-2019
 ///
 /// MODIFICATION HISTORY :
-///     1.0     31-May-2019     First Version
+///     1.0         31-May-2019     First Version
+///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
 ///
 ///
 #ifndef __IR_RATE_H__
@@ -25,7 +26,7 @@
 #include <ftw.h>
 
 #define _APP_NAME_              "ir_merge"
-#define _APP_VERS_              "1.0"
+#define _APP_VERS_              "1.1.0"
 
 #define     TYPE_TAP            "TAP"
 #define     TYPE_NRT            "NRT"
@@ -107,6 +108,7 @@ int     buildSnapFile(const char *snapfile);
 int     chkSnapVsState(const char *snap);
 int     _chkIrFile(const char *fpath, const struct stat *info, int typeflag, struct FTW *ftwbuf);
 void    procSynFiles(const char *dir, const char *fname, int seq, long cont_pos);
+int     olderThan(int day, const char *sdir, const char *fname);
 
 void    cloneInput(char *pbuf[]);
 int     mergeCdr(char *pbuf[], int bsize);
@@ -115,6 +117,7 @@ int     wrtAlrtDbConnFail(const char *odir, const char *fname, const char *dbsvr
 
 int     logState(const char *dir, const char *file_name);
 void    clearOldState();
+void    purgeOldData(const char *old_state);
 int     readConfig(int argc, char *argv[]);
 void    logHeader();
 void    printUsage();
