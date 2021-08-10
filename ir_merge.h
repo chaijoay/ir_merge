@@ -8,13 +8,14 @@
 ///
 /// CREATE DATE : 31-May-2019
 ///
-/// CURRENT VERSION NO : 1.0
+/// CURRENT VERSION NO : 1.1.2
 ///
-/// LAST RELEASE DATE  : 31-May-2019
+/// LAST RELEASE DATE  : 21-Nov-2019
 ///
 /// MODIFICATION HISTORY :
 ///     1.0         31-May-2019     First Version
 ///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
+///     1.1.2       21-Nov-2019     fix state file checking
 ///
 ///
 #ifndef __IR_RATE_H__
@@ -26,7 +27,7 @@
 #include <ftw.h>
 
 #define _APP_NAME_              "ir_merge"
-#define _APP_VERS_              "1.1.0"
+#define _APP_VERS_              "1.1.2"
 
 #define     TYPE_TAP            "TAP"
 #define     TYPE_NRT            "NRT"
@@ -124,6 +125,7 @@ void    printUsage();
 int     validateIni();
 int     _ini_callback(const char *section, const char *key, const char *value, void *userdata);
 void    makeIni();
+int     chkStateAndConcat(const char *oFileName);
 
 void    printCommon();
 

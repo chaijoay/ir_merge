@@ -8,12 +8,13 @@
 ///
 /// CREATE DATE : 15-May-2019
 ///
-/// CURRENT VERSION NO : 1.0
+/// CURRENT VERSION NO : 1.1.2
 ///
-/// LAST RELEASE DATE  : 15-May-2019
+/// LAST RELEASE DATE  : 21-Nov-2019
 ///
 /// MODIFICATION HISTORY :
-///     1.0     15-May-2019     First Version
+///     1.0         15-May-2019     First Version
+///     1.1.2       21-Nov-2019     fix state file checking
 ///
 ///
 #ifndef __IR_RATE_DBU_H__

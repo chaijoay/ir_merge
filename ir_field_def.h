@@ -8,12 +8,13 @@
 ///
 /// CREATE DATE : 15-May-2019
 ///
-/// CURRENT VERSION NO : 1.0
+/// CURRENT VERSION NO : 1.1.2
 ///
-/// LAST RELEASE DATE  : 15-May-2019
+/// LAST RELEASE DATE  : 21-Nov-2019
 ///
 /// MODIFICATION HISTORY :
-///     1.0     15-May-2019     First Version
+///     1.0         15-May-2019     First Version
+///     1.1.2       21-Nov-2019     fix state file checking
 ///
 ///
 #ifndef __IR_FIELD_DEF_H__
@@ -54,9 +55,9 @@ typedef struct _ir_common_ {
     char ori_source[4];             // 27: TAP, NRT, SCP
     char ori_filename[100];         // 28: Original input file name
     char country_code[5];           // 29: Country code
-    char orig_duration[21];         // 30: Original Record Duration of call in second
-    char orig_volume[21];           // 31: Original Record Volume (Byte)
-    char orig_one_charge[21];       // 32: Original Record Charge amount calculate from One Tariff unit in 'Satang'
+    char ori_duration[21];         // 30: Original Record Duration of call in second
+    char ori_volume[21];           // 31: Original Record Volume (Byte)
+    char ori_one_charge[21];       // 32: Original Record Charge amount calculate from One Tariff unit in 'Satang'
     char pmn_name[50];              // 33: PMN Name
     char roam_country[50];          // 34: Roaming Country
     char roam_region[50];           // 35: Roaming Region

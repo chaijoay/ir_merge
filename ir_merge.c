@@ -8,13 +8,14 @@
 ///
 /// CREATE DATE : 31-May-2019
 ///
-/// CURRENT VERSION NO : 1.0
+/// CURRENT VERSION NO : 1.1.2
 ///
-/// LAST RELEASE DATE  : 31-May-2019
+/// LAST RELEASE DATE  : 21-Nov-2019
 ///
 /// MODIFICATION HISTORY :
 ///     1.0         31-May-2019     First Version
 ///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
+///     1.1.2       21-Nov-2019     fix state file checking
 ///
 ///
 #define _XOPEN_SOURCE           700         // Required under GLIBC for nftw()
@@ -151,7 +152,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     logHeader();
-    
+
     char ir_file[SIZE_ITEM_L];  memset(ir_file, 0x00, sizeof(ir_file));
     char ir_type[10];           memset(ir_type, 0x00, sizeof(ir_type));
     long cont_pos = 0L;
@@ -163,7 +164,7 @@ int main(int argc, char *argv[])
     while ( TRUE ) {
 
         procLock(gszAppName, E_SET);
-        
+
         if ( isTerminated() == TRUE ) {
             break;
         }
@@ -173,6 +174,7 @@ int main(int argc, char *argv[])
         // 2. connect to dbs (and also retry if any)
 
         // start over from step 1
+        gnSnapCnt = 0;
         memset(szSnap, 0x00, sizeof(szSnap));
         sprintf(szSnap, "%s/%s.snap", gszIniParCommon[E_TMP_DIR], gszAppName);
         if ( cont_pos <= 0 ) {
@@ -188,6 +190,9 @@ int main(int argc, char *argv[])
             // check snap against state file
             gnSnapCnt = chkSnapVsState(szSnap);
         }
+        if ( gnSnapCnt < 0 ) {
+            break;  // There are some problem in reading state file
+        }
 
         if ( gnSnapCnt > 0 || cont_pos > 0 ) {
 
@@ -202,23 +207,23 @@ int main(int argc, char *argv[])
                     }
                     break;
                 }
-                
-                if ( cont_pos > 0 ) {   // continue from last time first 
+
+                if ( cont_pos > 0 ) {   // continue from last time first
                     writeLog(LOG_INF, "continue process %s from last time", ir_file);
                     seq++;
                     procSynFiles(dirname(ir_file), basename(ir_file), seq, cont_pos);
                     cont_pos = 0;
                     continue;           // back to build snap to continue normal loop
                 }
-                
+
                 nInpFileCntRnd = 0;
                 t_bat_start = time(NULL);
                 while ( fgets(snp_line, sizeof(snp_line), ifp) ) {
-                    
+
                     if ( isTerminated() == TRUE ) {
                         break;
                     }
-                    
+
                     trimStr(snp_line);  // snap record format => <path>|<filename>
                     char sdir[SIZE_ITEM_M], sfname[SIZE_ITEM_M];
                     memset(sdir, 0x00, sizeof(sdir));
@@ -226,21 +231,21 @@ int main(int argc, char *argv[])
 
                     getTokenItem(snp_line, 1, '|', sdir);
                     getTokenItem(snp_line, 2, '|', sfname);
-                    
+
                     if ( ! olderThan(atoi(gszIniParCommon[E_SKIP_OLD_FILE]), sdir, sfname) ) {
                         ( ++seq > 999 ? seq = 0 : seq );
                         procSynFiles(sdir, sfname, seq, 0L);
                     }
-                    
+
                     nInpFileCntDay++;
                     nInpFileCntRnd++;
 
                 }
                 t_bat_stop = time(NULL);
                 writeLog(LOG_INF, "total processed files for this round=%d round_time_used=%d sec", nInpFileCntRnd, (t_bat_stop - t_bat_start));
-                
+
                 fclose(ifp);
-                
+
                 if ( strcmp(gszToday, getSysDTM(DTM_DATE_ONLY)) ) {
                     purgeOldCdr(gnDayToKeep, gnPrcId);  // purge only at end of day
                 }
@@ -344,7 +349,7 @@ int chkSnapVsState(const char *snap)
     memset(tmp_stat, 0x00, sizeof(tmp_stat));
     memset(tmp_snap, 0x00, sizeof(tmp_snap));
     memset(cmd, 0x00, sizeof(cmd));
-    
+
     sprintf(tmp_stat, "%s/tmp_%s_XXXXXX", gszIniParCommon[E_TMP_DIR], gszAppName);
     sprintf(tmp_snap, "%s/osnap_%s_XXXXXX", gszIniParCommon[E_TMP_DIR], gszAppName);
     mkstemp(tmp_stat);
@@ -360,19 +365,28 @@ int chkSnapVsState(const char *snap)
     sprintf(cmd, "touch %s/%s_%s%s", gszIniParCommon[E_STATE_DIR], gszAppName, gszToday, STATE_SUFF);
 writeLog(LOG_DB3, "chkSnapVsState cmd '%s'", cmd);
     system(cmd);
-    // sort all state files (<APP_NAME>_<PROC_TYPE>_<YYYYMMDD>.proclist) to tmp_stat file
-    // state files format is <DIR>|<FILE_NAME>
-    sprintf(cmd, "sort -T %s %s/%s_*%s > %s 2>/dev/null", gszIniParCommon[E_TMP_DIR], gszIniParCommon[E_STATE_DIR], gszAppName, STATE_SUFF, tmp_stat);
+
+    if ( chkStateAndConcat(tmp_stat) == SUCCESS ) {
+        // sort all state files (<APP_NAME>_<PROC_TYPE>_<YYYYMMDD>.proclist) to tmp_stat file
+        // state files format is <DIR>|<FILE_NAME>
+        //sprintf(cmd, "sort -T %s %s/%s_*%s > %s 2>/dev/null", gszIniParCommon[E_TMP_DIR], gszIniParCommon[E_STATE_DIR], gszAppName, STATE_SUFF, tmp_stat);
+        sprintf(cmd, "sort -T %s %s > %s.tmp 2>/dev/null", gszIniParCommon[E_TMP_DIR], tmp_stat, tmp_stat);
 writeLog(LOG_DB3, "chkSnapVsState cmd '%s'", cmd);
-    system(cmd);
+        system(cmd);
+    }
+    else {
+        unlink(tmp_stat);
+        return FAILED;
+    }
+
     // compare tmp_stat file(sorted all state files) with sorted first_snap to get only unprocessed new files list
-    sprintf(cmd, "comm -23 %s %s > %s 2>/dev/null", snap, tmp_stat, tmp_snap);
+    sprintf(cmd, "comm -23 %s %s.tmp > %s 2>/dev/null", snap, tmp_stat, tmp_snap);
 writeLog(LOG_DB3, "chkSnapVsState cmd '%s'", cmd);
     system(cmd);
-    sprintf(cmd, "rm -f %s", tmp_stat);
+    sprintf(cmd, "rm -f %s %s.tmp", tmp_stat, tmp_stat);
 writeLog(LOG_DB3, "chkSnapVsState cmd '%s'", cmd);
     system(cmd);
-    
+
     sprintf(cmd, "mv %s %s", tmp_snap, snap);
 writeLog(LOG_DB3, "chkSnapVsState cmd '%s'", cmd);
     system(cmd);
@@ -412,7 +426,7 @@ int _chkIrFile(const char *fpath, const struct stat *info, int typeflag, struct 
         writeLog(LOG_WRN, "no read permission for %s skipped", fname);
         return 0;
     }
-    
+
     memset(path_only, 0x00, sizeof(path_only));
     strncpy(path_only, fpath, ftwbuf->base - 1);
 
@@ -475,9 +489,9 @@ void clearOldState()
                     char old_state[SIZE_ITEM_L];
                     memset(old_state, 0x00, sizeof(old_state));
                     sprintf(old_state, "%s/%s", gszIniParCommon[E_STATE_DIR], p_dirent->d_name);
-                    
+
                     purgeOldData(old_state);
-                    
+
                     sprintf(tmp, "rm -f %s/%s 2>/dev/null", gszIniParCommon[E_STATE_DIR], p_dirent->d_name);
                     writeLog(LOG_INF, "remove state file: %s", p_dirent->d_name);
                     system(tmp);
@@ -492,17 +506,17 @@ void purgeOldData(const char *old_state)
 {
     FILE *ofp = NULL;
     char line[SIZE_ITEM_L], sdir[SIZE_ITEM_L], sfname[SIZE_ITEM_L], cmd[SIZE_ITEM_L];
-    
+
     if ( (ofp = fopen(old_state, "r")) != NULL ) {
         memset(line, 0x00, sizeof(line));
         while ( fgets(line, sizeof(line),ofp) ) {
             memset(sdir,   0x00, sizeof(sdir));
             memset(sfname, 0x00, sizeof(sfname));
             memset(cmd,    0x00, sizeof(cmd));
-            
+
             getTokenItem(line, 1, '|', sdir);
             getTokenItem(line, 2, '|', sfname);
-            
+
             sprintf(cmd, "rm -f %s/%s", sdir, sfname);
             writeLog(LOG_DB3, "\told file %s/%s purged", sdir, sfname);
             system(cmd);
@@ -514,7 +528,7 @@ void purgeOldData(const char *old_state)
 
 int readConfig(int argc, char *argv[])
 {
-    
+
     char appPath[SIZE_ITEM_L];
     char tmp[SIZE_ITEM_T];
     int key, i;
@@ -555,7 +569,7 @@ int readConfig(int argc, char *argv[])
             return FAILED;
         }
     }
-    
+
     if ( strlen(tmp) > 1 || *tmp - '0' < 0 || *tmp - '0' > 9 ) {
         printUsage();
         return FAILED;
@@ -650,7 +664,7 @@ int validateIni()
         result = FAILED;
         fprintf(stderr, "invalid %s %s (%s)\n", gszIniStrOutput[E_CT_TO_MERGE], gszIniParOutput[E_CT_TO_MERGE], strerror(errno));
     }
-    
+
     // ----- Output TAP Section -----
     if ( *gszIniParGenTap[E_GEN_OUT] == 'Y' || *gszIniParGenTap[E_GEN_OUT] == 'y' ) {
         strcpy(gszIniParGenTap[E_GEN_OUT], "Y");
@@ -749,7 +763,7 @@ int validateIni()
         result = FAILED;
         fprintf(stderr, "%s must be > 0 (%s)\n", gszIniStrDbConn[E_RETRY_WAIT], gszIniParDbConn[E_RETRY_WAIT]);
     }
-    
+
     // number of days to purge cdr in db uses max value of wether E_SKIP_OLD_FILE or E_KEEP_STATE_DAY
     if ( atoi(gszIniParCommon[E_SKIP_OLD_FILE]) > atoi(gszIniParCommon[E_KEEP_STATE_DAY]) ) {
         gnDayToKeep = atoi(gszIniParCommon[E_SKIP_OLD_FILE]);
@@ -796,7 +810,7 @@ void procSynFiles(const char *dir, const char *fname, int seq, long cont_pos)
     }
     else {
         writeLog(LOG_INF, "processing file %s", fname);
-        
+
         t_start = time(NULL);
         if ( cont_pos > 0 ) {
             fseek(ifp_ir, cont_pos, SEEK_SET);
@@ -832,7 +846,9 @@ writeLog(LOG_DB3, "skip unhandled imsi '%s'", pbuf_rec[E_IMSI]);
                 skip_cnt++;
                 continue;
             }
-
+writeLog(LOG_DB3, "first mrg rec> stime(%s) calltype(%s) mobno(%s) imsi(%s) dur(%s) chg(%s[satang]) src(%s)"
+        , pbuf_rec[E_ST_CALL_DATE], pbuf_rec[E_CALLTYPE], pbuf_rec[E_MOBILE_NO], pbuf_rec[E_IMSI]
+        , pbuf_rec[E_DURATION], pbuf_rec[E_CHRG_ONE_TARIFF], pbuf_rec[E_ORI_SOURCE]);
 // int i=0;
 // for (i=0; i<NOF_IR_FLD; i++) {
     // printf("'%s' | ", pbuf_rec[i]);
@@ -874,25 +890,18 @@ writeLog(LOG_DB3, "skip unhandled imsi '%s'", pbuf_rec[E_IMSI]);
             writeLog(LOG_INF, "processed %s -> %s", fname, basename(gszOutFname));
             sprintf(cmd, "mv %s%s %s", gszOutFname, TMPSUF, gszOutFname);
             system(cmd);
-            
+
             chmod(gszOutFname, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 
-//#ifndef _USE_NEW_LAYOUT_     
-//#define _USE_NEW_LAYOUT_
-//#endif
-#ifdef  _USE_NEW_LAYOUT_
-            ; // do nothing 
-#else
             memset(cmd, 0x00, sizeof(cmd));
             char *f = strrchr(gszOutFname, '.');
             char s[SIZE_ITEM_L]; memset(s, 0x00, sizeof(s));
             strncpy(s, gszOutFname, (f - gszOutFname));
             sprintf(cmd, "touch %s.syn", s);
             system(cmd);
-            
+
             sprintf(cmd, "%s.syn", s);
             chmod(cmd, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
-#endif
         }
 
         logState(dir, fname);
@@ -917,9 +926,9 @@ int olderThan(int day, const char *sdir, const char *fname)
     char   full_name[SIZE_ITEM_L];
     long   file_age = 0;
     long   bound = (long)(day * SEC_IN_DAY);
-    
+
     memset(full_name, 0x00, sizeof(full_name));
-    
+
     memset(&stat_buf, 0x00, sizeof(stat_buf));
     if ( !lstat(full_name, &stat_buf) ) {
         systime = time(NULL);
@@ -964,9 +973,9 @@ void cloneInput(char *pbuf[])
     strcpy(gIrCommon.ori_source,         pbuf[E_ORI_SOURCE]);
     strcpy(gIrCommon.ori_filename,       pbuf[E_ORI_FILENAME]);
     strcpy(gIrCommon.country_code,       pbuf[E_COUNTRY_CODE]);
-    strcpy(gIrCommon.orig_duration,      pbuf[E_DURATION]);
-    strcpy(gIrCommon.orig_one_charge,    pbuf[E_CHRG_ONE_TARIFF]);
-    strcpy(gIrCommon.orig_volume,        pbuf[E_VOLUME]);
+    strcpy(gIrCommon.ori_duration,       pbuf[E_DURATION]);
+    strcpy(gIrCommon.ori_one_charge,     pbuf[E_CHRG_ONE_TARIFF]);
+    strcpy(gIrCommon.ori_volume,         pbuf[E_VOLUME]);
     strcpy(gIrCommon.pmn_name,           pbuf[E_PMN_NAME]);
     strcpy(gIrCommon.roam_country,       pbuf[E_ROAM_COUNTRY]);
     strcpy(gIrCommon.roam_region,        pbuf[E_ROAM_REGION]);
@@ -983,31 +992,25 @@ int mergeCdr(char *pbuf[], int bsize)
     // printf("'%s' | ", pbuf[i]);
 // }
 // printf("\n");
-    
+
     cloneInput(pbuf);   // copy pbuf to gIrCommon
-    
-    memset(dtm, 0x00, sizeof(dtm));
-    strncpy(dtm, gIrCommon.start_dtm, 8);           // copy YYYYMMDD, ircdr->start_dtm is in format of "YYYYMMDD HH:MI:SS"
-    strncat(dtm, gIrCommon.start_dtm+9, 2);         // cat HH
-    strncat(dtm, gIrCommon.start_dtm+12, 2);        // cat MI
-    strncat(dtm, gIrCommon.start_dtm+15, 2);        // cat SS
-    gIrCommon.start_dtm_time = dateStr2TimeT(dtm);  // convert start dtm string to time_t for further db insertion
-// printf("gIrCommon.start_dtm = '%s'\n", gIrCommon.start_dtm);
-// printf("dtm = '%s'\n", dtm);
-// printf("gIrCommon.start_dtm_time = '%ld'\n", gIrCommon.start_dtm_time);
-    if ( strstr(gszIniParOutput[E_SRC_TO_MERGE], gIrCommon.ori_source) == NULL ) {
-        if ( strstr(gszIniParOutput[E_CT_TO_MERGE], gIrCommon.call_type) == NULL ) {
-            return result;  // not merge
-        }
+
+    if ( strstr(gszIniParOutput[E_SRC_TO_MERGE], gIrCommon.ori_source) != NULL
+        && strstr(gszIniParOutput[E_CT_TO_MERGE], gIrCommon.call_type) != NULL ) {
+        memset(dtm, 0x00, sizeof(dtm));
+        strncpy(dtm, gIrCommon.start_dtm, 8);           // copy YYYYMMDD, ircdr->start_dtm is in format of "YYYYMMDD HH:MI:SS"
+        strncat(dtm, gIrCommon.start_dtm+9, 2);         // cat HH
+        strncat(dtm, gIrCommon.start_dtm+12, 2);        // cat MI
+        strncat(dtm, gIrCommon.start_dtm+15, 2);        // cat SS
+        gIrCommon.start_dtm_time = dateStr2TimeT(dtm);  // convert start dtm string to time_t for further db insertion
+
+        checkAndMerge(&gIrCommon, atoi(gszIniParCommon[E_SLACK_SEC]), gszIniParOutput[E_SRC_TO_MERGE], gnPrcId);
+
+        insertIrCdr(&gIrCommon, gnPrcId);
     }
-// printf("\n>>>>>>>>>\n");
-// printCommon();
-// printf("<<<<<<<<<\n");
-    checkAndMerge(&gIrCommon, atoi(gszIniParCommon[E_SLACK_SEC]), gszIniParOutput[E_SRC_TO_MERGE], gnPrcId);
-// printf("\n->->->->->\n");
-// printCommon();
-// printf("<-<-<-<-<-<-\n");
-    insertIrCdr(&gIrCommon, gnPrcId);
+    else {
+writeLog(LOG_DB3, "skip merge src(%s) calltype(%s)", gIrCommon.ori_source, gIrCommon.call_type);
+    }
 
     return result;
 
@@ -1018,7 +1021,7 @@ int wrtOutIrCommon(FILE **ofp)
     char full_irfile[SIZE_ITEM_L];
     int gen_output = FALSE;
     int result = FAILED;
-    
+
     if ( *ofp == NULL ) {
         memset(full_irfile, 0x00, sizeof(full_irfile));
         sprintf(full_irfile, "%s%s", gszOutFname, TMPSUF);
@@ -1053,11 +1056,8 @@ int wrtOutIrCommon(FILE **ofp)
         }
     }
 
-//#ifndef _USE_NEW_LAYOUT_     
-//#define _USE_NEW_LAYOUT_
-//#endif
-#ifdef  _USE_NEW_LAYOUT_
-    if ( gen_output ) {
+
+    if ( gen_output == TRUE ) {
         fprintf(*ofp, "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n",
                     gIrCommon.call_type, gIrCommon.imsi, gIrCommon.st_call_date, gIrCommon.st_call_time,
                     gIrCommon.duration, gIrCommon.called_no, gIrCommon.charge, gIrCommon.pmn, gIrCommon.proc_dtm,
@@ -1067,39 +1067,42 @@ int wrtOutIrCommon(FILE **ofp)
                     gIrCommon.total_call_evt_dur, gIrCommon.ori_rec_type, gIrCommon.mobile_no, gIrCommon.imei,
                     gIrCommon.ori_source, gIrCommon.ori_filename, gIrCommon.country_code,
                     gIrCommon.pmn_name, gIrCommon.roam_country, gIrCommon.roam_region,
-                    gIrCommon.orig_duration, gIrCommon.orig_volume, gIrCommon.orig_one_charge);
+                    gIrCommon.ori_duration, gIrCommon.ori_volume, gIrCommon.ori_one_charge);
         result = SUCCESS;
+writeLog(LOG_DB3, "final mrg rec> stime(%s) calltype(%s) mobno(%s) imsi(%s) dur(%s) chg(%s[satang]) orichg(%s[satang]) src(%s)"
+        , gIrCommon.st_call_time, gIrCommon.call_type, gIrCommon.mobile_no, gIrCommon.imsi
+        , gIrCommon.duration, gIrCommon.chrg_one_tariff, gIrCommon.ori_one_charge, gIrCommon.ori_source);
     }
-#else   // _USE_OLD_LAYOUT_
+#if 0   // _USE_OLD_LAYOUT_
     if ( gen_output ) {
-        
+
         char tmp1[21], tmp2[21], tmp3[21], tmp4[21], tmp5[21], tmp6[21], tmp7[21];
         memset(tmp1, 0x00, sizeof(tmp1)); memset(tmp2, 0x00, sizeof(tmp2)); memset(tmp3, 0x00, sizeof(tmp3));
         memset(tmp4, 0x00, sizeof(tmp4)); memset(tmp5, 0x00, sizeof(tmp5)); memset(tmp6, 0x00, sizeof(tmp6)); memset(tmp7, 0x00, sizeof(tmp7));
-        
+
         // gIrCommon.st_call_date      // from YYYYMMDD to YYYY-MM-DD
         sprintf(tmp1, "%.4s-%.2s-%.2s", gIrCommon.st_call_date, gIrCommon.st_call_date+4, gIrCommon.st_call_date+6);
-        
+
         // gIrCommon.proc_dtm          // from YYYYMMDDHHMMSS to YYYY-MM-DD HH:MM:SS
         sprintf(tmp2, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", gIrCommon.proc_dtm, gIrCommon.proc_dtm+4, gIrCommon.proc_dtm+6, gIrCommon.proc_dtm+8, gIrCommon.proc_dtm+10, gIrCommon.proc_dtm+12);
-        
+
         // gIrCommon.chrg_one_tariff   // from satang to satang x 10 ( 1000 = 1 THB )
         sprintf(tmp3, "%ld", (atol(gIrCommon.chrg_one_tariff) * 10));
-        
+
         // gIrCommon.th_st_call_dtm    // from YYYYMMDD HH:MM:SS to YYYY-MM-DD HH:MM:SS
         sprintf(tmp4, "%.4s-%.2s-%.2s %s", gIrCommon.th_st_call_dtm, gIrCommon.th_st_call_dtm+4, gIrCommon.th_st_call_dtm+6, gIrCommon.th_st_call_dtm+9);
-        
-        // gIrCommon.orig_one_charge   // from satang to satang x 10 ( 1000 = 1 THB )
-        sprintf(tmp5, "%ld", (atol(gIrCommon.orig_one_charge) * 10));
-        
+
+        // gIrCommon.ori_one_charge   // from satang to satang x 10 ( 1000 = 1 THB )
+        sprintf(tmp5, "%ld", (atol(gIrCommon.ori_one_charge) * 10));
+
         // gIrCommon.start_dtm         // from YYYYMMDD HH:MM:SS to YYYY-MM-DD HH:MM:SS
         sprintf(tmp6, "%.4s-%.2s-%.2s %s", gIrCommon.start_dtm, gIrCommon.start_dtm+4, gIrCommon.start_dtm+6, gIrCommon.start_dtm+9);
-        
+
         // gIrCommon.stop_dtm         // from YYYYMMDD HH:MM:SS to YYYY-MM-DD HH:MM:SS
         if ( *gIrCommon.stop_dtm != '\0' ) {
             sprintf(tmp7, "%.4s-%.2s-%.2s %s", gIrCommon.stop_dtm, gIrCommon.stop_dtm+4, gIrCommon.stop_dtm+6, gIrCommon.stop_dtm+9);
         }
-        
+
         fprintf(*ofp, "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n",
                     gIrCommon.call_type, gIrCommon.imsi, tmp1, gIrCommon.st_call_time,
                     gIrCommon.duration, gIrCommon.mobile_no, gIrCommon.called_no, gIrCommon.charge, gIrCommon.pmn,
@@ -1107,7 +1110,7 @@ int wrtOutIrCommon(FILE **ofp)
                     tmp4, gIrCommon.called_no_type, gIrCommon.risk_no_flg, gIrCommon.risk_no_id, tmp6,
                     tmp7, gIrCommon.chrg_id, gIrCommon.utc_time, gIrCommon.ori_rec_type, gIrCommon.imei,
                     gIrCommon.pmn_name, gIrCommon.roam_country, gIrCommon.roam_region,
-                    gIrCommon.orig_duration, tmp5, gIrCommon.ori_source);
+                    gIrCommon.ori_duration, tmp5, gIrCommon.ori_source);
         result = SUCCESS;
     }
 #endif
@@ -1135,7 +1138,7 @@ int wrtAlrtDbConnFail(const char *odir, const char *fname, const char *dbsvr)
     writeLog(LOG_INF, "db connection alert file is created: %s", fname);
 
     return SUCCESS;
-    
+
 }
 
 // int wrtOutReject(const char *odir, const char *fname, FILE *ofp, const char *record)
@@ -1201,6 +1204,46 @@ void makeIni()
 
 }
 
+int chkStateAndConcat(const char *oFileName)
+{
+    int result = FAILED;
+    DIR *p_dir;
+    struct dirent *p_dirent;
+    char cmd[SIZE_BUFF];
+    memset(cmd, 0x00, sizeof(cmd));
+    unlink(oFileName);
+
+    if ( (p_dir = opendir(gszIniParCommon[E_STATE_DIR])) != NULL ) {
+        while ( (p_dirent = readdir(p_dir)) != NULL ) {
+            // state file name: <APP_NAME>_<PROC_TYPE>_YYYYMMDD.proclist
+            if ( strcmp(p_dirent->d_name, ".") == 0 || strcmp(p_dirent->d_name, "..") == 0 )
+                continue;
+
+            if ( strstr(p_dirent->d_name, STATE_SUFF) != NULL &&
+                 strstr(p_dirent->d_name, gszAppName) != NULL ) {
+                char state_file[SIZE_ITEM_L];
+                memset(state_file, 0x00, sizeof(state_file));
+                sprintf(state_file, "%s/%s", gszIniParCommon[E_STATE_DIR], p_dirent->d_name);
+                if ( access(state_file, F_OK|R_OK|W_OK) != SUCCESS ) {
+                    writeLog(LOG_ERR, "unable to read/write file %s", state_file);
+                    result = FAILED;
+                    break;
+                }
+                else {
+                    sprintf(cmd, "cat %s >> %s 2>/dev/null", state_file, oFileName);
+                    system(cmd);
+                    result = SUCCESS;
+                }
+            }
+        }
+        closedir(p_dir);
+        return result;
+    }
+    else {
+        return result;
+    }
+}
+
 void printCommon()
 {
 
@@ -1233,9 +1276,9 @@ void printCommon()
     printf("ori_source         len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.ori_source)          ,(long)sizeof(gIrCommon.ori_source)         ,gIrCommon.ori_source        );
     printf("ori_filename       len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.ori_filename)        ,(long)sizeof(gIrCommon.ori_filename)       ,gIrCommon.ori_filename      );
     printf("country_code       len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.country_code)        ,(long)sizeof(gIrCommon.country_code)       ,gIrCommon.country_code      );
-    printf("orig_duration      len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.orig_duration)       ,(long)sizeof(gIrCommon.orig_duration)      ,gIrCommon.orig_duration     );
-    printf("orig_one_charge    len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.orig_one_charge)     ,(long)sizeof(gIrCommon.orig_one_charge)    ,gIrCommon.orig_one_charge   );
-    printf("orig_volume        len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.orig_volume)         ,(long)sizeof(gIrCommon.orig_volume)        ,gIrCommon.orig_volume       );
+    printf("ori_duration      len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.ori_duration)       ,(long)sizeof(gIrCommon.ori_duration)      ,gIrCommon.ori_duration     );
+    printf("ori_one_charge    len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.ori_one_charge)     ,(long)sizeof(gIrCommon.ori_one_charge)    ,gIrCommon.ori_one_charge   );
+    printf("ori_volume        len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.ori_volume)         ,(long)sizeof(gIrCommon.ori_volume)        ,gIrCommon.ori_volume       );
     printf("pmn_name           len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.pmn_name)            ,(long)sizeof(gIrCommon.pmn_name)           ,gIrCommon.pmn_name          );
     printf("roam_country       len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.roam_country)        ,(long)sizeof(gIrCommon.roam_country)       ,gIrCommon.roam_country      );
     printf("roam_region        len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.roam_region)         ,(long)sizeof(gIrCommon.roam_region)        ,gIrCommon.roam_region       );

@@ -8,12 +8,13 @@
 ///
 /// CREATE DATE : 15-May-2019
 ///
-/// CURRENT VERSION NO : 1.0
+/// CURRENT VERSION NO : 1.1.2
 ///
-/// LAST RELEASE DATE  : 15-May-2019
+/// LAST RELEASE DATE  : 21-Nov-2019
 ///
 /// MODIFICATION HISTORY :
-///     1.0     15-May-2019     First Version
+///     1.0         15-May-2019     First Version
+///     1.1.2       21-Nov-2019     fix state file checking
 ///
 ///
 #include "ir_merge_dbu.h"
@@ -85,7 +86,7 @@ void doCommit()
 
 int checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, int proc_id)
 {
-    
+
     VARCHAR szSql[SIZE_BUFF];
     char db_irsrc[4], called_no[35];
     time_t ub_time, lb_time;
@@ -93,16 +94,16 @@ int checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, in
     //int cdr_dur = 0, cdr_chg = 0;
     //int min_dur = 0, min_chg = 0;
     //long db_vol = 0, cdr_vol = 0, min_vol = 0, ltmp = -1;
-    
+
     int  cdr_dur = 0, db_dur = 0, min_dur = 0, tmp_dur = -1;
     long cdr_vol = 0, db_vol = 0, min_vol = 0, tmp_vol = -1;
     int  cdr_chg = 0, db_chg = 0, min_chg = 0, tmp_chg = -1;
-    
+
     int nCnt = 0;//, ntmp = -1;
-    
+
     ub_time = ircdr->start_dtm_time + slack_time;        // upper bound time_t
     lb_time = ircdr->start_dtm_time - slack_time;        // lower bound time_t
-    
+
     memset(called_no, 0x00, sizeof(called_no));
     if ( strlen(ircdr->called_no) == 0 ) {
         strcpy(called_no, "IS NULL");
@@ -114,7 +115,7 @@ int checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, in
     // ---------- start query data --------
 	sprintf((char*)szSql.arr, "SELECT DURATION, VOLUME, CHARGE, IR_SRC FROM MERGE_STATE_%d WHERE " \
                               "CALL_TYPE = '%s' AND IMSI = '%s' AND CALL_NUM %s AND CHARGE_TYPE = '%s' " \
-                              "AND TIME_KEY BETWEEN %ld AND %ld AND IR_SRC <> '%s' ", proc_id, 
+                              "AND TIME_KEY BETWEEN %ld AND %ld AND IR_SRC <> '%s' ", proc_id,
                               ircdr->call_type, ircdr->imsi, called_no, ircdr->chrg_type,
                               (long)lb_time, (long)ub_time, ircdr->ori_source);
     szSql.len = strlen((char*)szSql.arr);
@@ -129,19 +130,19 @@ writeLog(LOG_DB3, (char*)szSql.arr);
         EXEC SQL AT SUB_DB CLOSE orcMrgCrs;
         return FAILED;
     }
-    
+
     // if ( sqlca.sqlcode == NOT_FOUND ) {
 // writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm);
         // return SUCCESS;
     // }
-    
-    cdr_dur = atoi(ircdr->orig_duration);
-    cdr_vol = atol(ircdr->orig_volume);
-    cdr_chg = atoi(ircdr->orig_one_charge);
+
+    cdr_dur = atoi(ircdr->ori_duration);
+    cdr_vol = atol(ircdr->ori_volume);
+    cdr_chg = atoi(ircdr->ori_one_charge);
     min_dur = cdr_dur;
     min_vol = cdr_vol;
     min_chg = cdr_chg;
-    
+
 // printf("\ndur atoi(%s)   '%d'\n",  ircdr->duration, cdr_dur);
 // printf("vol atol(%s)   '%ld'\n", ircdr->volume, cdr_vol);
 // printf("one atoi(%s)   '%d'\n",  ircdr->chrg_one_tariff, cdr_chg);
@@ -151,7 +152,7 @@ writeLog(LOG_DB3, (char*)szSql.arr);
         memset(db_irsrc, 0x00, sizeof(db_irsrc));
         db_dur = 0;
         db_vol = 0;
-        db_chg = 0;        
+        db_chg = 0;
         EXEC SQL AT SUB_DB FETCH orcMrgCrs INTO :db_dur, :db_vol, :db_chg, :db_irsrc;
         if ( sqlca.sqlcode != SUCCESS ) {
             if ( sqlca.sqlcode == NOT_FOUND ) {
@@ -203,12 +204,12 @@ writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)
     sprintf(ircdr->duration,        "%d",  min_dur);
     sprintf(ircdr->volume,          "%ld", min_vol);
     sprintf(ircdr->chrg_one_tariff, "%d",  min_chg);
-    
+
 //printf("recal-dur > '%s'\n",   ircdr->duration);
 //printf("recal-vol > '%s'\n",   ircdr->volume);
 //printf("recal-one > '%s'\n\n", ircdr->chrg_one_tariff);
-    
-writeLog(LOG_DB3, "merged (%s, %s, %s, %s, %s) with %d records", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm, nCnt);
+
+writeLog(LOG_DB3, "merged (%s, %s, %s, %s, %s, %s) with %d records", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm, ircdr->chrg_one_tariff, nCnt);
 
     return nCnt;
 
@@ -218,21 +219,24 @@ int insertIrCdr(ST_IR_COMMON *ircdr, int proc_id)
 {
     VARCHAR szISql[SIZE_BUFF];
     sprintf((char*)szISql.arr, "INSERT INTO MERGE_STATE_%d(CALL_TYPE, IMSI, CALL_NUM, CHARGE_TYPE, IR_SRC, CHARGE, DURATION, VOLUME, START_DTM, TIME_KEY) " \
-                               "VALUES('%s', '%s', '%s', '%s', '%s', %s, %s, %s, TO_DATE('%s', 'YYYYMMDD HH24:MI:SS'), %ld)",
+                               "VALUES('%s', '%s', '%s', '%s', '%s', %ld, %ld, %ld, TO_DATE('%s', 'YYYYMMDD HH24:MI:SS'), %ld)",
                                proc_id,
                                ircdr->call_type,
                                ircdr->imsi,
                                ircdr->called_no,
                                ircdr->chrg_type,
                                ircdr->ori_source,
-                               ( *(ircdr->orig_one_charge) == '\0' ? "0" : ircdr->orig_one_charge),
-                               ( *(ircdr->orig_duration)   == '\0' ? "0" : ircdr->orig_duration  ),
-                               ( *(ircdr->orig_volume)     == '\0' ? "0" : ircdr->orig_volume    ),
+                               //( *(ircdr->ori_one_charge) == '\0' ? "0" : ircdr->ori_one_charge),
+                               //( *(ircdr->ori_duration)   == '\0' ? "0" : ircdr->ori_duration  ),
+                               //( *(ircdr->ori_volume)     == '\0' ? "0" : ircdr->ori_volume    ),
+                               atol(ircdr->ori_one_charge),
+                               atol(ircdr->ori_duration),
+                               atol(ircdr->ori_volume),
                                ircdr->start_dtm,
                                ircdr->start_dtm_time);
     szISql.len = strlen((char *)szISql.arr);
 writeLog(LOG_DB3, (char*)szISql.arr);
-    
+
     EXEC SQL AT SUB_DB EXECUTE IMMEDIATE :szISql;
     if ( sqlca.sqlcode == SUCCESS || sqlca.sqlcode == KEY_DUP ) {
 writeLog(LOG_DB3, "insert result %d (%s)", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc));
@@ -250,16 +254,19 @@ int purgeOldCdr(int days_to_keep, int proc_id)
 {
 
     VARCHAR szDSql[SIZE_BUFF];
-    
+
     writeLog(LOG_INF, "check and purge cdr older than %d days", days_to_keep);
+
     sprintf((char*)szDSql.arr, "DELETE FROM MERGE_STATE_%d WHERE TRUNC(START_DTM) < TRUNC(SYSDATE - %d) ", proc_id, days_to_keep);
     szDSql.len = strlen((char *)szDSql.arr);
-writeLog(LOG_DB3, (char*)szDSql.arr);
-    
+
+    writeLog(LOG_INF, (char*)szDSql.arr);
+
     EXEC SQL AT SUB_DB EXECUTE IMMEDIATE :szDSql;
+    EXEC SQL AT SUB_DB COMMIT WORK;
     if ( sqlca.sqlcode == SUCCESS ) {
 writeLog(LOG_DB3, "purge result %d (%s)", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc));
-        doCommit();
+        //doCommit();
         return SUCCESS;
     }
     else {
@@ -267,5 +274,5 @@ writeLog(LOG_DB3, "purge result %d (%s)", sqlca.sqlcode, trimStr(sqlca.sqlerrm.s
 writeLog(LOG_DB3, "purge failed");
         return FAILED;
     }
-    
+
 }
