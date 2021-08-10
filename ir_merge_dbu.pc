@@ -1,0 +1,247 @@
+///
+///
+/// FACILITY    : db utility for rating and mapping of ir cdr
+///
+/// FILE NAME   : ir_rate_dbu.pc
+///
+/// AUTHOR      : Thanakorn Nitipiromchai
+///
+/// CREATE DATE : 15-May-2019
+///
+/// CURRENT VERSION NO : 1.0
+///
+/// LAST RELEASE DATE  : 15-May-2019
+///
+/// MODIFICATION HISTORY :
+///     1.0     15-May-2019     First Version
+///
+///
+#include "ir_merge_dbu.h"
+#include <sqlca.h>
+#include <sqlda.h>
+#include <sqlcpr.h>
+
+EXEC SQL INCLUDE SQLCA;
+// EXEC SQL BEGIN DECLARE SECTION;
+    // VARCHAR gv_vcSubUsr[40];
+    // VARCHAR gv_vcSubPwd[40];
+    // VARCHAR gv_vcSubConnect[40];
+
+    // VARCHAR gv_vcSubCUsr[40];
+    // VARCHAR gv_vcSubCPwd[40];
+    // VARCHAR gv_vcSubCConnect[40];
+// EXEC SQL END DECLARE SECTION;
+
+//ONETARIFF_TAB    *gOneTar = NULL;
+//ONETARIFF_TAB    *gOneTarAvgPmn = NULL;
+//ONETARIFF_TAB    *gOneTarAvgAll = NULL;
+//RISK_BNO_TAB     *gRiskBno = NULL;
+//CALL_TYPE_TAB    *gCallType = NULL;
+//COUNTRY_CODE_TAB *gCountryCode = NULL;
+
+int gnOneTarRecCnt = 0;
+int gnOneTarAvgPmnRecCnt = 0;
+int gnOneTarAvgAllRecCnt = 0;
+int gnRiskBnoRecCnt = 0;
+int gnCallTypeRecCnt = 0;
+int gnCountryCodeRecCnt = 0;
+
+int connectDbSub(char *szDbUsr, char *szDbPwd, char *szDbSvr, int nRetryCnt, int nRetryWait)
+{
+
+    int retry = nRetryCnt;
+    int result = SUCCESS;
+
+    EXEC SQL DECLARE SUB_DB DATABASE;
+    do {
+        writeLog(LOG_INF, "%sconnecting %s db ...", ( retry != nRetryCnt ? "retry " : "" ), szDbSvr);
+        EXEC SQL CONNECT :szDbUsr IDENTIFIED BY :szDbPwd AT SUB_DB USING :szDbSvr;
+        if (sqlca.sqlcode == SUCCESS) {
+            return SUCCESS;
+        }
+        else {
+            writeLog(LOG_ERR, "connectDbSub failed ora(%d) - %s", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc));
+            result = FAILED;
+            sleep(nRetryWait);
+        }
+        retry--;
+    }
+    while ( retry > 0 );
+
+    return result;
+
+}
+
+void disconnSub(char *szDbSvr)
+{
+	EXEC SQL AT SUB_DB COMMIT WORK RELEASE;
+    writeLog(LOG_INF, "disconnected from %s", szDbSvr);
+}
+
+void doCommit()
+{
+    EXEC SQL AT SUB_DB COMMIT WORK;
+}
+
+int checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, int proc_id)
+{
+    
+    VARCHAR szSql[SIZE_BUFF];
+    char db_irsrc[4], called_no[35];
+    time_t ub_time, lb_time;
+    //int db_dur  = 0, db_chg  = 0;
+    //int cdr_dur = 0, cdr_chg = 0;
+    //int min_dur = 0, min_chg = 0;
+    //long db_vol = 0, cdr_vol = 0, min_vol = 0, ltmp = -1;
+    
+    int  cdr_dur = 0, db_dur = 0, min_dur = 0, tmp_dur = -1;
+    long cdr_vol = 0, db_vol = 0, min_vol = 0, tmp_vol = -1;
+    int  cdr_chg = 0, db_chg = 0, min_chg = 0, tmp_chg = -1;
+    
+    int nCnt = 0;//, ntmp = -1;
+    
+    ub_time = ircdr->start_dtm_time + slack_time;        // upper bound time_t
+    lb_time = ircdr->start_dtm_time - slack_time;        // lower bound time_t
+    
+    memset(called_no, 0x00, sizeof(called_no));
+    if ( strlen(ircdr->called_no) == 0 ) {
+        strcpy(called_no, "IS NULL");
+    }
+    else {
+        sprintf(called_no, "= '%s'", ircdr->called_no);
+    }
+
+    // ---------- start query data --------
+	sprintf((char*)szSql.arr, "SELECT DURATION, VOLUME, CHARGE, IR_SRC FROM MERGE_STATE_%d WHERE " \
+                              "CALL_TYPE = '%s' AND IMSI = '%s' AND CALL_NUM %s AND CHARGE_TYPE = '%s' " \
+                              "AND TIME_KEY BETWEEN %ld AND %ld AND IR_SRC <> '%s' ", proc_id, 
+                              ircdr->call_type, ircdr->imsi, called_no, ircdr->chrg_type,
+                              (long)lb_time, (long)ub_time, ircdr->ori_source);
+    szSql.len = strlen((char*)szSql.arr);
+writeLog(LOG_DB3, (char*)szSql.arr);
+
+    EXEC SQL AT SUB_DB PREPARE orcStmt FROM :szSql;
+    EXEC SQL AT SUB_DB DECLARE orcMrgCrs CURSOR FOR orcStmt;
+    EXEC SQL AT SUB_DB OPEN orcMrgCrs;
+
+    if ( sqlca.sqlcode < SUCCESS ) {
+        writeLog(LOG_ERR, "checkAndMerge: Ora(%d) Open orcMrgCrs Error on MERGE_STATE_%d table", sqlca.sqlcode, proc_id);
+        EXEC SQL AT SUB_DB CLOSE orcMrgCrs;
+        return FAILED;
+    }
+    
+    // if ( sqlca.sqlcode == NOT_FOUND ) {
+// writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm);
+        // return SUCCESS;
+    // }
+    
+    cdr_dur = atoi(ircdr->orig_duration);
+    cdr_vol = atol(ircdr->orig_volume);
+    cdr_chg = atoi(ircdr->orig_one_charge);
+    min_dur = cdr_dur;
+    min_vol = cdr_vol;
+    min_chg = cdr_chg;
+    
+// printf("\ndur atoi(%s)   '%d'\n",  ircdr->duration, cdr_dur);
+// printf("vol atol(%s)   '%ld'\n", ircdr->volume, cdr_vol);
+// printf("one atoi(%s)   '%d'\n",  ircdr->chrg_one_tariff, cdr_chg);
+
+    while ( TRUE ) {
+
+        memset(db_irsrc, 0x00, sizeof(db_irsrc));
+        db_dur = 0;
+        db_vol = 0;
+        db_chg = 0;        
+        EXEC SQL AT SUB_DB FETCH orcMrgCrs INTO :db_dur, :db_vol, :db_chg, :db_irsrc;
+        if ( sqlca.sqlcode != SUCCESS ) {
+            if ( sqlca.sqlcode == NOT_FOUND ) {
+writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm);
+                break;
+            }
+            else {
+                writeLog(LOG_WRN, "checkAndMerge: Ora(%d) fetching orcMrgCrs Error on MERGE_STATE_%d table (%s)", sqlca.sqlcode, proc_id, trimStr(sqlca.sqlerrm.sqlerrmc));
+                break;
+            }
+        }
+        trimStr(db_irsrc);
+
+//printf("'%s' (%s) cdr/db dur( %d/%d ), vol( %d/%d ), chg( %d/%d )\n", db_irsrc, ircdr->call_type, cdr_dur, db_dur, cdr_vol, db_vol, cdr_chg, db_chg);
+
+        if ( strstr(src2merge, db_irsrc) != NULL ) {  // only ir_src within allow list
+            nCnt++;
+            // dealing with duration ...
+            if ( db_dur < cdr_dur ) {
+                tmp_dur = cdr_dur - db_dur;
+                if ( tmp_dur < min_dur )    // always use lowest value
+                    min_dur = tmp_dur;
+            }
+            else {
+                min_dur = 0;                // if db value > cdr value (only just one record) always use zero value
+            }
+            // dealing with volume ...
+            if ( db_vol < cdr_vol ) {
+                tmp_vol = cdr_vol - db_vol;
+                if ( tmp_vol < min_vol )    // always use lowest value
+                    min_vol = tmp_vol;
+            }
+            else {
+                min_vol = 0;                // if db value > cdr value (only just one record) always use zero value
+            }
+            // dealing with charge ...
+            if ( db_chg < cdr_chg ) {
+                tmp_chg = cdr_chg - db_chg;
+                if ( tmp_chg < min_chg )    // always use lowest value
+                    min_chg = tmp_chg;
+            }
+            else {
+                min_chg = 0;                // if db value > cdr value (only just one record) always use zero value
+            }
+        }
+    }   /* End of outer while loop (1) */
+    EXEC SQL AT SUB_DB CLOSE orcMrgCrs;
+
+    sprintf(ircdr->duration,        "%d",  min_dur);
+    sprintf(ircdr->volume,          "%ld", min_vol);
+    sprintf(ircdr->chrg_one_tariff, "%d",  min_chg);
+    
+//printf("recal-dur > '%s'\n",   ircdr->duration);
+//printf("recal-vol > '%s'\n",   ircdr->volume);
+//printf("recal-one > '%s'\n\n", ircdr->chrg_one_tariff);
+    
+writeLog(LOG_DB3, "merged (%s, %s, %s, %s, %s) with %d records", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm, nCnt);
+
+    return nCnt;
+
+}
+
+int insertIrCdr(ST_IR_COMMON *ircdr, int proc_id)
+{
+    VARCHAR szISql[SIZE_BUFF];
+    sprintf((char*)szISql.arr, "INSERT INTO MERGE_STATE_%d(CALL_TYPE, IMSI, CALL_NUM, CHARGE_TYPE, IR_SRC, CHARGE, DURATION, VOLUME, START_DTM, TIME_KEY) " \
+                               "VALUES('%s', '%s', '%s', '%s', '%s', %s, %s, %s, TO_DATE('%s', 'YYYYMMDD HH24:MI:SS'), %ld)",
+                               proc_id,
+                               ircdr->call_type,
+                               ircdr->imsi,
+                               ircdr->called_no,
+                               ircdr->chrg_type,
+                               ircdr->ori_source,
+                               ( *(ircdr->orig_one_charge) == '\0' ? "0" : ircdr->orig_one_charge),
+                               ( *(ircdr->orig_duration)   == '\0' ? "0" : ircdr->orig_duration  ),
+                               ( *(ircdr->orig_volume)     == '\0' ? "0" : ircdr->orig_volume    ),
+                               ircdr->start_dtm,
+                               ircdr->start_dtm_time);
+    szISql.len = strlen((char *)szISql.arr);
+writeLog(LOG_DB3, (char*)szISql.arr);
+    
+    EXEC SQL AT SUB_DB EXECUTE IMMEDIATE :szISql;
+    if ( sqlca.sqlcode == SUCCESS || sqlca.sqlcode == KEY_DUP ) {
+writeLog(LOG_DB3, "insert result %d (%s)", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc));
+        return SUCCESS;
+    }
+    else {
+        writeLog(LOG_ERR, "insertIrCdr: Ora(%d) %s, insert MERGE_STATE_%d table failed", sqlca.sqlcode, trimStr(sqlca.sqlerrm.sqlerrmc), proc_id);
+writeLog(LOG_DB3, "insert failed");
+        return FAILED;
+    }
+
+}
