@@ -16,6 +16,7 @@
 ///     1.0         31-May-2019     First Version
 ///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
 ///     1.1.2       21-Nov-2019     fix state file checking
+///     1.1.3       18-Sep-2020     check further on call_number similarity before merging
 ///
 ///
 #define _XOPEN_SOURCE           700         // Required under GLIBC for nftw()
@@ -224,7 +225,7 @@ int main(int argc, char *argv[])
                         break;
                     }
 
-                    trimStr(snp_line);  // snap record format => <path>|<filename>
+                    trimStr((unsigned char*)snp_line);  // snap record format => <path>|<filename>
                     char sdir[SIZE_ITEM_M], sfname[SIZE_ITEM_M];
                     memset(sdir, 0x00, sizeof(sdir));
                     memset(sfname, 0x00, sizeof(sfname));
@@ -823,7 +824,7 @@ void procSynFiles(const char *dir, const char *fname, int seq, long cont_pos)
             memset(&gIrCommon, 0x00, sizeof(gIrCommon));
             memset(read_rec_ori, 0x00, sizeof(read_rec_ori));
 
-            trimStr(read_rec);
+            trimStr((unsigned char*)read_rec);
 
             // safe original read record for later use, since getTokenAll modifies input string.
             strcpy(read_rec_ori, read_rec);
@@ -1284,8 +1285,8 @@ void printCommon()
     printf("roam_region        len='%5d' sizeof='%5ld' val='%s' \n" ,(int)strlen(gIrCommon.roam_region)         ,(long)sizeof(gIrCommon.roam_region)        ,gIrCommon.roam_region       );
 
 }
-//
+/*
 // for reformat to older version
-//printf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", \
-//$1, $2, $3, $4, $5, $25, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $19, $20, $21, $22, $24, $26,  "",  "",  "", $30, $32, $27);
-//
+// printf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", \
+// $1, $2, $3, $4, $5, $25, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $19, $20, $21, $22, $24, $26,  "",  "",  "", $30, $32, $27);
+*/

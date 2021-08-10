@@ -16,6 +16,7 @@
 ///     1.0         31-May-2019     First Version
 ///     1.1.0       17-Sep-2019     Add keep state, purge old data feature and flushes logState
 ///     1.1.2       21-Nov-2019     fix state file checking
+///     1.1.3       18-Sep-2020     check further on call_number similarity before merging
 ///
 ///
 #ifndef __IR_RATE_H__

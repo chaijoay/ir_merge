@@ -19,6 +19,8 @@ BIN_DIR=./bin
 OBJ_DIR=./obj
 LIB_DIR=../../libs/c
 
+rm ${BIN_DIR}/ir_merge.exe
+
 echo "${CC} ${CFLAGS} -o ${OBJ_DIR}/procsig.o   -c ${LIB_DIR}/procsig.c   ${INCLUDES}"
       ${CC} ${CFLAGS} -o ${OBJ_DIR}/procsig.o   -c ${LIB_DIR}/procsig.c   ${INCLUDES}
 echo "${CC} ${CFLAGS} -o ${OBJ_DIR}/strlogutl.o -c ${LIB_DIR}/strlogutl.c ${INCLUDES}"
@@ -34,4 +36,4 @@ echo "${CC} -o ${OBJ_DIR}/ir_merge_dbu.o ${CFLAGS} ${ORACLE_INCLUDES} ${INCLUDES
 echo "${CC} ${CFLAGS} -lm -L${ORACLE_HOME}/lib -lclntsh -o ${BIN_DIR}/ir_merge.exe ${OBJ_DIR}/minIni.o ${OBJ_DIR}/strlogutl.o ${OBJ_DIR}/procsig.o ${OBJ_DIR}/ir_merge.o ${OBJ_DIR}/ir_merge_dbu.o"
       ${CC} ${CFLAGS} -lm -L${ORACLE_HOME}/lib -lclntsh -o ${BIN_DIR}/ir_merge.exe ${OBJ_DIR}/minIni.o ${OBJ_DIR}/strlogutl.o ${OBJ_DIR}/procsig.o ${OBJ_DIR}/ir_merge.o ${OBJ_DIR}/ir_merge_dbu.o
 echo "rm -f ${OBJ_DIR}/strlogutl.o ${OBJ_DIR}/minIni.o ${OBJ_DIR}/ir_merge.o ${OBJ_DIR}/procsig.o ${OBJ_DIR}/ir_merge_dbu.o ./ir_merge_dbu.c ./ir_merge_dbu.lis"
-     #rm -f ${OBJ_DIR}/strlogutl.o ${OBJ_DIR}/minIni.o ${OBJ_DIR}/ir_merge.o ${OBJ_DIR}/procsig.o ${OBJ_DIR}/ir_merge_dbu.o ./ir_merge_dbu.c ./ir_merge_dbu.lis
+      rm -f ${OBJ_DIR}/strlogutl.o ${OBJ_DIR}/minIni.o ${OBJ_DIR}/ir_merge.o ${OBJ_DIR}/procsig.o ${OBJ_DIR}/ir_merge_dbu.o ./ir_merge_dbu.c ./ir_merge_dbu.lis

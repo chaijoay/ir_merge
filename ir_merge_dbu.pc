@@ -15,6 +15,7 @@
 /// MODIFICATION HISTORY :
 ///     1.0         15-May-2019     First Version
 ///     1.1.2       21-Nov-2019     fix state file checking
+///     1.1.3       18-Sep-2020     check further on call_number similarity before merging
 ///
 ///
 #include "ir_merge_dbu.h"
@@ -106,15 +107,16 @@ int checkAndMerge(ST_IR_COMMON *ircdr, int slack_time, const char *src2merge, in
 
     memset(called_no, 0x00, sizeof(called_no));
     if ( strlen(ircdr->called_no) == 0 ) {
-        strcpy(called_no, "IS NULL");
+        strcpy(called_no, "AND CALL_NUM IS NULL");
     }
     else {
-        sprintf(called_no, "= '%s'", ircdr->called_no);
+        // remove call_num in where condition then logically check instead
+        //sprintf(called_no, "= '%s'", ircdr->called_no);
     }
 
     // ---------- start query data --------
-	sprintf((char*)szSql.arr, "SELECT DURATION, VOLUME, CHARGE, IR_SRC FROM MERGE_STATE_%d WHERE " \
-                              "CALL_TYPE = '%s' AND IMSI = '%s' AND CALL_NUM %s AND CHARGE_TYPE = '%s' " \
+	sprintf((char*)szSql.arr, "SELECT DURATION, VOLUME, CHARGE, IR_SRC, CALL_NUM FROM MERGE_STATE_%d WHERE " \
+                              "CALL_TYPE = '%s' AND IMSI = '%s' %s AND CHARGE_TYPE = '%s' " \
                               "AND TIME_KEY BETWEEN %ld AND %ld AND IR_SRC <> '%s' ", proc_id,
                               ircdr->call_type, ircdr->imsi, called_no, ircdr->chrg_type,
                               (long)lb_time, (long)ub_time, ircdr->ori_source);
@@ -150,10 +152,11 @@ writeLog(LOG_DB3, (char*)szSql.arr);
     while ( TRUE ) {
 
         memset(db_irsrc, 0x00, sizeof(db_irsrc));
+        memset(called_no, 0x00, sizeof(called_no));
         db_dur = 0;
         db_vol = 0;
         db_chg = 0;
-        EXEC SQL AT SUB_DB FETCH orcMrgCrs INTO :db_dur, :db_vol, :db_chg, :db_irsrc;
+        EXEC SQL AT SUB_DB FETCH orcMrgCrs INTO :db_dur, :db_vol, :db_chg, :db_irsrc, :called_no;
         if ( sqlca.sqlcode != SUCCESS ) {
             if ( sqlca.sqlcode == NOT_FOUND ) {
 writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)", ircdr->call_type, ircdr->imsi, ircdr->called_no, ircdr->chrg_type, ircdr->start_dtm);
@@ -164,40 +167,48 @@ writeLog(LOG_DB2, "checkAndMerge: no data found, insert new (%s, %s, %s, %s, %s)
                 break;
             }
         }
-        trimStr(db_irsrc);
+        trimStr((unsigned char*)db_irsrc);
+        trimStr((unsigned char*)called_no);
+
+        int perc_match = 0;
+        strrcmp(ircdr->called_no, called_no, &perc_match);
+
+        if ( perc_match >= 70 ) {
 
 //printf("'%s' (%s) cdr/db dur( %d/%d ), vol( %d/%d ), chg( %d/%d )\n", db_irsrc, ircdr->call_type, cdr_dur, db_dur, cdr_vol, db_vol, cdr_chg, db_chg);
 
-        if ( strstr(src2merge, db_irsrc) != NULL ) {  // only ir_src within allow list
-            nCnt++;
-            // dealing with duration ...
-            if ( db_dur < cdr_dur ) {
-                tmp_dur = cdr_dur - db_dur;
-                if ( tmp_dur < min_dur )    // always use lowest value
-                    min_dur = tmp_dur;
-            }
-            else {
-                min_dur = 0;                // if db value > cdr value (only just one record) always use zero value
-            }
-            // dealing with volume ...
-            if ( db_vol < cdr_vol ) {
-                tmp_vol = cdr_vol - db_vol;
-                if ( tmp_vol < min_vol )    // always use lowest value
-                    min_vol = tmp_vol;
-            }
-            else {
-                min_vol = 0;                // if db value > cdr value (only just one record) always use zero value
-            }
-            // dealing with charge ...
-            if ( db_chg < cdr_chg ) {
-                tmp_chg = cdr_chg - db_chg;
-                if ( tmp_chg < min_chg )    // always use lowest value
-                    min_chg = tmp_chg;
-            }
-            else {
-                min_chg = 0;                // if db value > cdr value (only just one record) always use zero value
+            if ( strstr(src2merge, db_irsrc) != NULL ) {  // only ir_src within allow list
+                nCnt++;
+                // dealing with duration ...
+                if ( db_dur < cdr_dur ) {
+                    tmp_dur = cdr_dur - db_dur;
+                    if ( tmp_dur < min_dur )    // always use lowest value
+                        min_dur = tmp_dur;
+                }
+                else {
+                    min_dur = 0;                // if db value > cdr value (only just one record) always use zero value
+                }
+                // dealing with volume ...
+                if ( db_vol < cdr_vol ) {
+                    tmp_vol = cdr_vol - db_vol;
+                    if ( tmp_vol < min_vol )    // always use lowest value
+                        min_vol = tmp_vol;
+                }
+                else {
+                    min_vol = 0;                // if db value > cdr value (only just one record) always use zero value
+                }
+                // dealing with charge ...
+                if ( db_chg < cdr_chg ) {
+                    tmp_chg = cdr_chg - db_chg;
+                    if ( tmp_chg < min_chg )    // always use lowest value
+                        min_chg = tmp_chg;
+                }
+                else {
+                    min_chg = 0;                // if db value > cdr value (only just one record) always use zero value
+                }
             }
         }
+
     }   /* End of outer while loop (1) */
     EXEC SQL AT SUB_DB CLOSE orcMrgCrs;
 

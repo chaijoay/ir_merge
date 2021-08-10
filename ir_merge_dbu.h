@@ -15,6 +15,7 @@
 /// MODIFICATION HISTORY :
 ///     1.0         15-May-2019     First Version
 ///     1.1.2       21-Nov-2019     fix state file checking
+///     1.1.3       18-Sep-2020     check further on call_number similarity before merging
 ///
 ///
 #ifndef __IR_RATE_DBU_H__
